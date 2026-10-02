@@ -59,33 +59,46 @@ function sanitizeSameSite(val) {
       timeout: 35000
     });
 
-    await sleep(4000);
+    await sleep(5000);
 
-    // 1. Coba tutup popup / modal jika ada yang menutupi
-    await page.keyboard.press('Escape');
-    await sleep(1000);
+    // 1. Coba tutup popup/modal jika ada yang muncul di layar
+    try {
+      await page.keyboard.press('Escape');
+      // Klik tombol close/silang modal jika ada
+      const modalCloseBtn = page.locator('[data-e2e="modal-close-icon"], button[aria-label="Close"], .TUXModal-close').first();
+      if (await modalCloseBtn.isVisible()) {
+        await modalCloseBtn.click({ force: true });
+        await sleep(1000);
+      }
+    } catch (_) {}
 
-    // 2. Gunakan selector spesifik yang berada di dalam area profil utama
-    // Jika tidak ditemukan, fallback ke tombol follow pertama
-    let followBtn = page.locator('[data-e2e="user-header"] button[data-e2e="follow-button"]');
-    
-    const count = await followBtn.count();
-    if (count === 0) {
-      followBtn = page.locator('header button[data-e2e="follow-button"]').first();
+    // 2. Strategi Seleksi Tombol Follow Target
+    // Opsi A: Berdasarkan aria-label target langsung
+    let followBtn = page.locator(`button[data-e2e="follow-button"][aria-label*="${cleanTarget}" i]`).first();
+
+    // Opsi B: Cari tombol follow yang ada di kontainer profil bagian atas (bukan suggested accounts)
+    if (await followBtn.count() === 0) {
+      followBtn = page.locator('[data-e2e="user-page"] button[data-e2e="follow-button"]').first();
+    }
+
+    // Opsi C: Fallback umum jika container tidak memiliki data-e2e khusus
+    if (await followBtn.count() === 0) {
+      followBtn = page.locator('button[data-e2e="follow-button"]').first();
     }
 
     await followBtn.waitFor({ state: 'attached', timeout: 15000 });
 
     const btnText = (await followBtn.innerText()).toLowerCase();
 
-    if (btnText.includes('following') || btnText.includes('mengikuti')) {
+    if (btnText.includes('following') || btnText.includes('mengikuti') || btnText.includes('teman') || btnText.includes('friends')) {
       console.log(`[!] Info: Akun @${cleanTarget} sudah di-follow sebelumnya.`);
     } else {
-      // Gunakan force: true untuk mengabaikan halangan overlay modal
+      await followBtn.scrollIntoViewIfNeeded();
+      await sleep(1000);
       await followBtn.click({ force: true });
       console.log(`[+] SUKSES: Berhasil menekan tombol follow untuk @${cleanTarget}!`);
 
-      // Tunggu agar network request commit/follow selesai terkirim
+      // Tunggu respons server selesai
       await sleep(6000);
     }
   } catch (err) {
