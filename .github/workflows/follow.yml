@@ -1,0 +1,33 @@
+name: TikTok Follow Bot
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Username TikTok yang ingin di-follow (tanpa @)'
+        required: true
+        default: 'miiiewa'
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: |
+          npm install playwright
+          npx playwright install --with-deps chromium
+
+      - name: Jalankan Bot
+        env:
+          TIKTOK_COOKIES: ${{ secrets.TIKTOK_COOKIES }}
+          TARGET_USER: ${{ github.event.inputs.target }}
+        run: node bot.js
