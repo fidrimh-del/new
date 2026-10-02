@@ -26,11 +26,14 @@ function sanitizeSameSite(val) {
     process.exit(1);
   }
 
+  // Format cookie agar mencakup domain .tiktok.com secara menyeluruh
   const formattedCookies = rawCookies.map((c) => {
+    let domain = c.domain || '.tiktok.com';
+    if (!domain.startsWith('.')) domain = '.' + domain;
     const cookieObj = {
       name: c.name,
       value: c.value,
-      domain: c.domain.startsWith('.') ? c.domain : `.${c.domain}`,
+      domain: domain,
       path: c.path || '/'
     };
     if (c.sameSite) {
@@ -50,6 +53,18 @@ function sanitizeSameSite(val) {
   await context.addCookies(formattedCookies);
   const page = await context.newPage();
 
+  // Memantau respons network khusus aksi follow
+  let apiFollowResponse = null;
+  page.on('response', async (response) => {
+    if (response.url().includes('/api/commit/follow/user/')) {
+      try {
+        const resJson = await response.json();
+        apiFollowResponse = resJson;
+        console.log('[*] Respon Server TikTok:', JSON.stringify(resJson));
+      } catch (_) {}
+    }
+  });
+
   const cleanTarget = target.trim().replace('@', '');
   console.log(`[*] Mengunjungi profil target: https://www.tiktok.com/@${cleanTarget}`);
 
@@ -59,51 +74,73 @@ function sanitizeSameSite(val) {
       timeout: 35000
     });
 
-    await sleep(5000);
+    await sleep(4000);
 
-    // 1. Coba tutup popup/modal jika ada yang muncul di layar
+    // 1. Cek apakah sesi login benar-benar aktif (periksa apakah ada avatar profil sendiri)
+    const isLoggedIn = await page.locator('[data-e2e="profile-icon"]').count() > 0;
+    if (isLoggedIn) {
+      console.log('[+] Status: Sesi login terverifikasi aktif!');
+    } else {
+      console.log('[-] PERINGATAN: Sesi login TIDAK terdeteksi! Browser dianggap sebagai tamu (guest).');
+    }
+
+    // 2. Tutup popup overlay jika ada
     try {
       await page.keyboard.press('Escape');
-      // Klik tombol close/silang modal jika ada
-      const modalCloseBtn = page.locator('[data-e2e="modal-close-icon"], button[aria-label="Close"], .TUXModal-close').first();
-      if (await modalCloseBtn.isVisible()) {
-        await modalCloseBtn.click({ force: true });
+      const closeBtn = page.locator('[data-e2e="modal-close-icon"], button[aria-label="Close"]').first();
+      if (await closeBtn.isVisible()) {
+        await closeBtn.click({ force: true });
         await sleep(1000);
       }
     } catch (_) {}
 
-    // 2. Strategi Seleksi Tombol Follow Target
-    // Opsi A: Berdasarkan aria-label target langsung
+    // 3. Cari tombol follow profil utama
     let followBtn = page.locator(`button[data-e2e="follow-button"][aria-label*="${cleanTarget}" i]`).first();
-
-    // Opsi B: Cari tombol follow yang ada di kontainer profil bagian atas (bukan suggested accounts)
     if (await followBtn.count() === 0) {
       followBtn = page.locator('[data-e2e="user-page"] button[data-e2e="follow-button"]').first();
     }
-
-    // Opsi C: Fallback umum jika container tidak memiliki data-e2e khusus
     if (await followBtn.count() === 0) {
       followBtn = page.locator('button[data-e2e="follow-button"]').first();
     }
 
     await followBtn.waitFor({ state: 'attached', timeout: 15000 });
-
     const btnText = (await followBtn.innerText()).toLowerCase();
 
-    if (btnText.includes('following') || btnText.includes('mengikuti') || btnText.includes('teman') || btnText.includes('friends')) {
+    if (btnText.includes('following') || btnText.includes('mengikuti')) {
       console.log(`[!] Info: Akun @${cleanTarget} sudah di-follow sebelumnya.`);
     } else {
       await followBtn.scrollIntoViewIfNeeded();
-      await sleep(1000);
+      await sleep(1500);
       await followBtn.click({ force: true });
-      console.log(`[+] SUKSES: Berhasil menekan tombol follow untuk @${cleanTarget}!`);
+      console.log(`[+] Tombol follow ditekan! Menunggu respon server TikTok...`);
 
-      // Tunggu respons server selesai
-      await sleep(6000);
+      // Tunggu respons network
+      await sleep(5000);
+
+      // Cek apakah muncul pop-up login setelah tombol ditekan
+      const loginModal = page.locator('#loginContainer, [data-e2e="login-modal"]');
+      if (await loginModal.count() > 0 && await loginModal.isVisible()) {
+        console.log('[-] GAGAL: Muncul dialog permintaan login! Cookie tidak valid atau expired.');
+      }
+
+      // Cek apakah muncul Captcha
+      const captcha = page.locator('#captcha-verify-image, .captcha_verify_container');
+      if (await captcha.count() > 0 && await captcha.isVisible()) {
+        console.log('[-] GAGAL: Muncul verifikasi puzzle/captcha!');
+      }
+
+      if (apiFollowResponse) {
+        if (apiFollowResponse.status_code === 0) {
+          console.log('[+] SUKSES BESAR: Server mengonfirmasi follow berhasil masuk ke database!');
+        } else {
+          console.log(`[-] GAGAL DARI SERVER: status_code ${apiFollowResponse.status_code} (${apiFollowResponse.status_msg})`);
+        }
+      } else {
+        console.log('[-] Tidak ada sinyal network follow yang terkirim ke server.');
+      }
     }
   } catch (err) {
-    console.error(`[-] Gagal mengeksekusi follow pada @${cleanTarget}:`, err.message);
-    process.exit(1);
+    console.error(`[-] Terjadi error:`, err.message);
   } finally {
     await browser.close();
     console.log('[*] Selesai.');
