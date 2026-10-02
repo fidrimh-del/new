@@ -1,5 +1,4 @@
 const { chromium } = require('playwright');
-const fs = require('fs');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -19,7 +18,6 @@ function sanitizeSameSite(val) {
     process.exit(1);
   }
 
-  // 1. Baca dan format cookie dari GitHub Secret
   let rawCookies = [];
   try {
     rawCookies = JSON.parse(process.env.TIKTOK_COOKIES || '[]');
@@ -41,7 +39,6 @@ function sanitizeSameSite(val) {
     return cookieObj;
   });
 
-  // 2. Inisialisasi Chromium Playwright
   console.log('[*] Menyiapkan browser Chromium...');
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
@@ -62,26 +59,34 @@ function sanitizeSameSite(val) {
       timeout: 35000
     });
 
-    // Beri jeda render JavaScript halaman profil
     await sleep(4000);
 
-    // Gunakan .first() untuk menghindari tombol follow dari suggested accounts
-    const followBtn = page.locator('button[data-e2e="follow-button"]').first();
-    await followBtn.waitFor({ state: 'visible', timeout: 15000 });
+    // 1. Coba tutup popup / modal jika ada yang menutupi
+    await page.keyboard.press('Escape');
+    await sleep(1000);
+
+    // 2. Gunakan selector spesifik yang berada di dalam area profil utama
+    // Jika tidak ditemukan, fallback ke tombol follow pertama
+    let followBtn = page.locator('[data-e2e="user-header"] button[data-e2e="follow-button"]');
+    
+    const count = await followBtn.count();
+    if (count === 0) {
+      followBtn = page.locator('header button[data-e2e="follow-button"]').first();
+    }
+
+    await followBtn.waitFor({ state: 'attached', timeout: 15000 });
 
     const btnText = (await followBtn.innerText()).toLowerCase();
 
     if (btnText.includes('following') || btnText.includes('mengikuti')) {
       console.log(`[!] Info: Akun @${cleanTarget} sudah di-follow sebelumnya.`);
     } else {
-      // Gerakkan kursor ke tombol sebelum klik (simulasi manusia)
-      await followBtn.hover();
-      await sleep(1500);
-      await followBtn.click();
+      // Gunakan force: true untuk mengabaikan halangan overlay modal
+      await followBtn.click({ force: true });
       console.log(`[+] SUKSES: Berhasil menekan tombol follow untuk @${cleanTarget}!`);
 
-      // Tunggu agar network request follow selesai terkirim
-      await sleep(5000);
+      // Tunggu agar network request commit/follow selesai terkirim
+      await sleep(6000);
     }
   } catch (err) {
     console.error(`[-] Gagal mengeksekusi follow pada @${cleanTarget}:`, err.message);
